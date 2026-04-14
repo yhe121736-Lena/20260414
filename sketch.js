@@ -1,4 +1,4 @@
-let gameState = "START"; // START, PLAYING, GAMEOVER, WIN
+let gameState = "START"; // START, PLAYING, GAMEOVER, WIN, ATTACKING
 let particles = [];      // 粒子陣列
 let shakeTime = 0;       // 震動計時器
 let bgStars = [];        // 背景星星陣列
@@ -21,6 +21,7 @@ let targetRow = 0;       // 目標列位
 let combo = 0;           // 連擊數
 let cols, rows;          // 網格行列數
 let cellW, cellH;        // 格子寬高
+let attackScale = 0;     // 飛碟突擊縮放比例
 
 function setup() {
   createCanvas(windowWidth, windowHeight);
@@ -92,6 +93,8 @@ function draw() {
     checkTimer();
   } else if (gameState === "GAMEOVER") {
     drawGameOver();
+  } else if (gameState === "ATTACKING") {
+    drawUFOAttack();
   } else if (gameState === "WIN") {
     drawWinScreen();
   }
@@ -239,11 +242,15 @@ function updateAndDrawUFOs() {
 function pickTargetCoordinate() {
   targetCol = floor(random(cols));
   targetRow = floor(random(rows));
-  nextTargetChange = millis() + 8000; // 每 8 秒換一個座標
+  nextTargetChange = millis() + 8000; // 8 秒內必須擊落
 }
 
 function updateAndDrawGrid() {
-  if (millis() > nextTargetChange) pickTargetCoordinate();
+  // 如果時間到還沒點擊，觸發飛碟攻擊
+  if (millis() > nextTargetChange && gameState === "PLAYING") {
+    gameState = "ATTACKING";
+    attackScale = 0.1;
+  }
 
   // 檢查是否需要初始化網格
   if (blocks.length === 0) initGrid();
@@ -285,6 +292,18 @@ function drawUI() {
   textAlign(RIGHT, CENTER);
   fill(255);
   text(`剩餘時間: ${remaining}s`, width - 30, 40);
+
+  // 飛碟威脅進度條 (8秒倒數)
+  let threatTime = max(0, nextTargetChange - millis());
+  let threatWidth = map(threatTime, 0, 8000, 0, 200);
+  noStroke();
+  fill(255, 50, 50, 150);
+  rect(width/2 - 100, 25, 200, 10, 5);
+  fill(255, 50, 50);
+  rect(width/2 - 100, 25, threatWidth, 10, 5);
+  textAlign(CENTER);
+  textSize(12);
+  text("威脅接近中", width/2, 50);
 
   // 繪製網格編號 (HUD 風格)
   push();
@@ -385,25 +404,58 @@ class RadarTarget {
       let factor = map(gridDist, 0, maxGridDist, 1, 0);
       factor = pow(factor, 2.5); // 讓接近目標時的變化更劇烈
 
-      // 格子高亮
-      fill(100, 255, 255, 20 + factor * 50);
-      noStroke();
-      rect(0, 0, this.w, this.h);
+      let isTarget = (this.col === targetCol && this.row === targetRow);
+      let c = isTarget ? color(255, 50, 50) : lerpColor(color(0, 255, 255, 100), color(255, 50, 50), factor);
 
-      // 核心感應圓：越接近目標座標，顏色越紅，圓越大
-      let c = lerpColor(color(0, 255, 255), color(255, 50, 50), factor);
-      fill(c);
+      // 繪製雷達脈衝波 (越近波越大、越快)
+      let pulseSpeed = map(factor, 0, 1, 2, 8);
+      let circSize = (frameCount * pulseSpeed) % (cellW * (0.5 + factor * 1.5));
       
-      let circSize = map(factor, 0, 1, 8, min(this.w, this.h) * 1.3);
-      ellipse(0, 0, circSize);
-      
-      // 增加脈衝波紋
+      // 如果是目標，顯示飛碟剪影
+      if (isTarget && factor > 0.8) drawTargetUFO(0, 0, factor * 40);
+
       noFill();
       stroke(c);
-      let pulse = (frameCount * 2) % 50;
-      ellipse(0, 0, circSize + pulse);
+      ellipse(0, 0, circSize);
+      ellipse(0, 0, circSize * 0.6);
     }
     pop();
+  }
+}
+
+function drawTargetUFO(x, y, sz) {
+  push();
+  translate(x, y);
+  fill(255, 50, 50, 200);
+  noStroke();
+  // 飛碟座艙
+  arc(0, -sz*0.1, sz*0.5, sz*0.6, PI, TWO_PI);
+  // 飛碟主體
+  ellipse(0, 0, sz, sz*0.4);
+  // 底部燈光
+  fill(255, 255, 255);
+  ellipse(0, sz*0.05, sz*0.1);
+  pop();
+}
+
+function drawUFOAttack() {
+  // 計算目標原本在畫面上的中心點
+  let tx = targetCol * cellW + cellW / 2;
+  let ty = targetRow * cellH + cellH / 2 + 80;
+
+  // 飛碟迅速放大
+  attackScale += 0.01; // 大幅降低速度，讓玩家看清楚飛過來的過程
+  let currentSize = attackScale * width;
+  
+  // 畫面震動隨飛船接近而增強 (從輕微抖動變為劇烈震動)
+  shakeTime = floor(map(attackScale, 0.1, 1.5, 5, 30));
+  
+  background(10, 0, 0, 50);
+  drawTargetUFO(tx, ty, currentSize);
+
+  // 當飛碟蓋過全螢幕時失敗
+  if (currentSize > width * 1.5) {
+    gameState = "GAMEOVER";
   }
 }
 
@@ -436,16 +488,28 @@ function updateAndDrawParticles() {
 }
 
 function drawStartScreen() {
-  fill(255);
+  // 繪製半透明遮罩讓背景星星若隱若現
+  background(5, 5, 25, 150);
+  
+  fill(100, 255, 255);
   textAlign(CENTER, CENTER);
+  textFont('monospace');
   textSize(42);
   text("★ 星際座標獵人 ★", width / 2, height / 2 - 50);
-  textSize(18);
-  let instructions = "【座標盲測指南】\n\n1. 移動滑鼠在網格中「探索」隱藏的座標\n2. 滑過格子時，圓形越大、顏色越紅代表越接近目標\n3. 當感應到強烈的紅色訊號時，點擊該座標捕獲能量\n4. 60 秒內挑戰最高感測水平";
+  
+  fill(255);
+  textSize(16);
+  let instructions = "【 任務簡報 】\n\n1. 移動滑鼠進行網格探索，偵測隱藏的外星飛船\n2. 越接近目標，雷達波越劇烈、頻率越快\n3. 必須在飛船發動突襲前點擊座標將其擊落\n4. 連續擊落可獲得 Combo 加成";
   text(instructions, width / 2, height / 2 + 80);
   textSize(20);
-  fill(100, 255, 255);
-  text(">>> 點擊畫面開始掃描 <<<", width / 2, height / 2 + 220);
+  // 閃爍效果的提示文字
+  let blink = map(sin(frameCount * 0.1), -1, 1, 100, 255);
+  fill(100, 255, 255, blink);
+  text(">>> 初始化系統：點擊進入駕駛艙 <<<", width / 2, height / 2 + 220);
+  
+  // 裝飾用 UI 線條
+  stroke(100, 255, 255, 50);
+  line(width/2 - 150, height/2 - 20, width/2 + 150, height/2 - 20);
 }
 
 function drawGameOver() {
@@ -455,7 +519,7 @@ function drawGameOver() {
   textSize(40);
   text("任務失敗", width / 2, height / 2);
   textSize(20);
-  text("點擊畫面重啟引擎", width / 2, height / 2 + 50);
+  text("點擊畫面返回主選單", width / 2, height / 2 + 50);
 }
 
 function drawWinScreen() {
@@ -467,7 +531,7 @@ function drawWinScreen() {
   textSize(24);
   text(`最終收穫能量: ${score}`, width / 2, height / 2 + 20);
   textSize(18);
-  text("點擊挑戰更高紀錄", width / 2, height / 2 + 80);
+  text("點擊畫面返回主選單", width / 2, height / 2 + 80);
 }
 
 function mousePressed() {
@@ -502,15 +566,18 @@ function mousePressed() {
         break;
       }
     }
-  }
-
-  if (gameState !== "PLAYING") {
+  } else if (gameState === "START") {
+    // 從主頁點擊：正式初始化並開始遊戲
     score = 0;
     combo = 0;
+    attackScale = 0;
     blocks = [];
     particles = [];
     startTime = millis();
     pickTargetCoordinate();
     gameState = "PLAYING";
+  } else {
+    // 從結束或攻擊畫面點擊：回到主選單
+    gameState = "START";
   }
 }
